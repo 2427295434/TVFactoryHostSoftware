@@ -11,6 +11,9 @@ from datetime import datetime
 import serial.tools.list_ports
 import configparser
 import os
+import re
+import requests
+import json
 
 # 配置日志文件
 log_dir = './log'
@@ -145,7 +148,7 @@ timeout = 0.1
 
 # 发送的数据
 send_source_HDMI1 = bytes([0xF1, 0x01, 0x01, 0x07, 0x00, 0xF6, 0xF2])
-send_get_portstate = bytes([0xF1, 0x01, 0x01, 0x07, 0x00, 0xF6, 0xF2])
+send_get_portstate = bytes([0xF1, 0x02, 0x01, 0x07, 0x00, 0xF6, 0xF2])
 
 # 初始化串口
 ser = None
@@ -211,12 +214,14 @@ def connect_serial():
     if not open_serial():
         log("串口打开失败")
         update_setting_status("串口打开失败", connected=False)
+    update_port_list()
 
 def disconnect_serial():
     """断开串口连接"""
     close_serial()
     log("串口断开连接.")
     update_setting_status("串口未连接", connected=False)
+    update_port_list()
 
 def update_port_list():
     """更新串口列表"""
@@ -238,9 +243,21 @@ def update_setting_status(message, connected=False):
         status_label.config(bg="green")
     else:
         status_label.config(bg="red")
+################################################################################
+# 全局参数设置
+def rule_SN(SN):
+
+    rule = r'^[A-Za-z0-9]{15}$'
+
+    if re.match(rule,SN):
+        return True
+    else:
+        return False
+    
 
 ################################################################################
 # 整机测试
+# 修改参数
 def enable_fulltest_Module(status_text):
     if status_text.get() == "启用":
         status_text.set("停用")
@@ -340,7 +357,58 @@ def change_value_confirm():
     reset_module_button.config(state=tk.DISABLED)
     reset_mes_checkbutton.config(state=tk.DISABLED)
     reset_mes_module_button.config(state=tk.DISABLED)
+
+    config.read(testconfig_file)
     
+
+# 烧key
+def burn_key(SN,workoder,ip,port,range_min,range_max,FWver,modelindex,status_update_to_mes):
+
+    # 判断输入是否合法
+    if not rule_SN(SN):
+        log("SN不合法，请重新输入SN")
+        tk.messagebox.showerror("错误","error01: SN不合法，请重新输入SN")
+        return
+    
+    ### 下载key
+    ########################################################################################################
+    url = f"http://{ip}:{port}/vzapi/getKey"
+    # 发送参数
+    MES_getkey = {
+        "wonum": workoder,
+        "sn": SN
+    }
+    # 发送POST请求
+    try:
+        response = requests.post(url, data=json.dumps(MES_getkey), headers={'Content-Type': 'application/json'})
+        # 解析响应
+        if response.status_code == 200:
+            result = response.json()
+            success_message = f"KEY下载成功：{result}"
+            log(success_message)
+        else:
+            error_message = f"请求MES失败, 状态码: {response.status_code}"
+            log(error_message)
+            tk.messagebox.showerror("错误","error03: 请求MES失败，请输入正确的MES地址或SN")
+            return
+    except requests.RequestException as e:
+        error_message = f"请求MES时发生异常: {str(e)}"
+        log(error_message)
+        tk.messagebox.showerror("错误", "error04: 尝试请求MES时发生异常")
+        return
+    #######################################################################################################
+
+    # 判断串口是否已连接
+    if status_label.cget("bg") != "green":
+        log("串口未连接，请连接串口")
+        tk.messagebox.showerror("错误","error02: 串口未连接，请连接串口")
+        return
+    
+    # 清空SN_entry,方便下一次输入
+    fulltest_SN.set('')
+
+    print("OK!")
+
 ################################################################################
 # 创建主窗口
 root = tk.Tk()
@@ -453,7 +521,17 @@ burnkey_module_button_text = tk.StringVar(value="启用")
 burnkey_module_button = tk.Button(fulltest_tab2_frame, textvariable=burnkey_module_button_text, width = 6, font=("宋体", 15 ,"bold"), command = lambda: enable_fulltest_Module(burnkey_module_button_text), state=DISABLED)       #待补充command参数
 burnkey_module_button.place(x=200, y=390)
 #烧key——测试
-burnkey_test_button = tk.Button(fulltest_tab2_frame, text="测试", width = 6, font=("宋体", 15 ,"bold"))       #待补充command参数
+burnkey_test_button = tk.Button(fulltest_tab2_frame, text="测试", width = 6, font=("宋体", 15 ,"bold"),
+                                command = lambda: burn_key(SN_entry.get(),
+                                                           config.get('DEFAULT','workorder_entry'),
+                                                           config.get('DEFAULT','IP_entry'),
+                                                           config.get('DEFAULT','port_entry'),
+                                                           config.get('DEFAULT','ULPKlimit_min_entry'),
+                                                           config.get('DEFAULT','ULPKlimit_max_entry'),
+                                                           config.get('DEFAULT','FWver_entry'),
+                                                           config.get('DEFAULT','modelindex_entry'),
+                                                           config.getboolean('DEFAULT','check_key_to_mes_checkbutton')
+                                                           ))
 burnkey_test_button.place(x=280, y=390)
 
 #防呆复位模块1
